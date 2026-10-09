@@ -18,6 +18,7 @@ import de.tutao.tutashared.data.SseInfo
 import de.tutao.tutashared.ipc.NativeCredentialsFacade
 import de.tutao.tutashared.ipc.wrap
 import de.tutao.tutashared.offline.AndroidSqlCipherFacade
+import de.tutao.tutashared.offline.TaggedSqlValue
 import de.tutao.tutashared.offline.sqlTagged
 import de.tutao.tutashared.push.SseStorage
 import de.tutao.tutashared.push.toSdkCredentials
@@ -244,7 +245,7 @@ class TutanotaNotificationsHandler(
 	}
 
 	private suspend fun handleNotificationInfos(sseInfo: SseInfo, notificationInfos: List<NotificationInfo>) {
-		val metadatas = notificationInfos.map { notificationInfo ->
+		val metadatas = notificationInfos.mapNotNull { notificationInfo ->
 			try {
 				val metaData = try {
 					suspensionHandler.deferRequest({ downloadEmailMetadata(sseInfo, notificationInfo) }, MAIL_RESOURCE)
@@ -265,6 +266,9 @@ class TutanotaNotificationsHandler(
 				}
 
 				Pair(notificationInfo, metaData)
+			} catch (e: SpamMailException) {
+				Log.d(TAG, "Not showing a notification for a mail that will be moved to spam: ${e.message}")
+				null
 			} catch (e: Throwable) {
 				Log.w(TAG, e)
 				Pair(notificationInfo, null)
@@ -304,6 +308,7 @@ class TutanotaNotificationsHandler(
 
 		val mailParsedServerModel = loggedInSdk.mailFacade().loadUntypedMail(mailId)
 		val mail = sdk.makeTypedMail(mailParsedServerModel)
+		var spamModel: ByteArray? = null
 		if (unencryptedCredentials.databaseKey != null) {
 			Log.d(TAG, "Inserting mail $mailId into offline db")
 			val serializedMail = sdk.serializeMail(mailParsedServerModel)
@@ -323,11 +328,26 @@ class TutanotaNotificationsHandler(
 						serializedMail.wrap().sqlTagged(),
 					)
 				)
+				spamModel = (sqlCipherFacade.get(
+					"SELECT model FROM spam_classification_model WHERE ownerGroup = ?",
+					listOf((mail.ownerGroup ?: "").sqlTagged())
+				)?.get("model") as? TaggedSqlValue.Bytes)?.value?.data
 			} catch (e: SQLException) {
 				Log.w(TAG, "Failed to insert mail into offline db: $mailId", e)
 			} finally {
 				sqlCipherFacade.closeDb()
 			}
+		}
+
+		// the app only moves mails to spam while it is running, so skip notifications for those it will move
+		val spamVerdict = try {
+			loggedInSdk.spamNotificationFilter().checkNewMail(mailId, spamModel)
+		} catch (e: Exception) {
+			Log.w(TAG, "Failed to check mail for spam: $mailId", e)
+			null
+		}
+		if (spamVerdict?.isSpam == true) {
+			throw SpamMailException("$mailId (${spamVerdict.reason})")
 		}
 
 
@@ -384,6 +404,9 @@ class TutanotaNotificationsHandler(
 	}
 
 	internal open class HttpException(val code: Int) : Exception()
+
+	private class SpamMailException(message: String) : Exception(message)
+
 	companion object {
 		private const val TAG = "TutanotaNotifications"
 		private val MISSED_NOTIFICATION_TTL = TimeUnit.DAYS.toMillis(30)

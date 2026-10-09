@@ -73,6 +73,75 @@ impl EntityClient {
 		Ok(parsed_entity)
 	}
 
+	/// Loads blob element instances (e.g. `MailDetailsBlob`), like `EntityRestClient.loadMultipleBlobElements`
+	#[allow(dead_code)] // test builds use the mock instead
+	pub async fn load_blob_elements(
+		&self,
+		type_ref: &TypeRef,
+		archive_id: &GeneratedId,
+		element_ids: &[GeneratedId],
+		access_info: &crate::entities::generated::storage::BlobServerAccessInfo,
+	) -> Result<Vec<ParsedEntity>, ApiCallError> {
+		let type_model = self.resolve_client_type_ref(type_ref)?;
+		let ids = element_ids
+			.iter()
+			.map(|id| id.as_str())
+			.collect::<Vec<_>>()
+			.join(",");
+		let query = {
+			let mut query = form_urlencoded::Serializer::new(String::new());
+			for (key, value) in self
+				.auth_headers_provider
+				.provide_headers(type_model.version)
+			{
+				query.append_pair(&key, &value);
+			}
+			query.append_pair("ids", &ids);
+			query.append_pair("blobAccessToken", &access_info.blobAccessToken);
+			query.finish()
+		};
+
+		let mut last_error = ApiCallError::internal("no blob server to load from".to_owned());
+		for server in &access_info.servers {
+			let url = format!(
+				"{}/rest/{}/{}/{}?{}",
+				server.url, type_ref.app, type_model.name, archive_id, query
+			);
+			let options = RestClientOptions {
+				body: None,
+				headers: Default::default(),
+				suspension_behavior: Some(SuspensionBehavior::Suspend),
+			};
+			let response = match self
+				.rest_client
+				.request_binary(url, HttpMethod::GET, options)
+				.await
+			{
+				Ok(response) => response,
+				Err(e) => {
+					last_error = e.into();
+					continue;
+				},
+			};
+			if !(200..=299).contains(&response.status) {
+				last_error = ApiCallError::ServerResponseError {
+					source: HttpError::from_http_response(response.status, &response.headers)?,
+				};
+				continue;
+			}
+			let body = response.body.ok_or_else(|| {
+				ApiCallError::internal("blob element response has no body".into())
+			})?;
+			let raw_entities = serde_json::from_slice::<Vec<RawEntity>>(body.as_slice())
+				.map_err(|e| ApiCallError::internal_with_err(e, "invalid blob element response"))?;
+			return raw_entities
+				.into_iter()
+				.map(|e| self.json_serializer.parse(type_ref, e).map_err(Into::into))
+				.collect();
+		}
+		Err(last_error)
+	}
+
 	/// Returns the definition of an entity/instance type using the internal `TypeModelProvider`
 	pub fn resolve_client_type_ref(&self, type_ref: &TypeRef) -> Result<&TypeModel, ApiCallError> {
 		self.type_model_provider
@@ -428,6 +497,13 @@ mockall::mock! {
 		pub fn get_type_model_provider() -> Arc<TypeModelProvider>;
 		pub fn resolve_client_type_ref<'a>(&'a self, type_ref: &TypeRef) -> Result<&'a TypeModel, ApiCallError>;
 		pub fn resolve_server_type_ref(&self, type_ref: &TypeRef) -> Result<Arc<TypeModel>, ApiCallError>;
+		pub async fn load_blob_elements(
+			&self,
+			type_ref: &TypeRef,
+			archive_id: &GeneratedId,
+			element_ids: &[GeneratedId],
+			access_info: &crate::entities::generated::storage::BlobServerAccessInfo,
+		) -> Result<Vec<ParsedEntity>, ApiCallError>;
 		pub async fn load<Id: IdType>(
 			&self,
 			type_ref: &TypeRef,

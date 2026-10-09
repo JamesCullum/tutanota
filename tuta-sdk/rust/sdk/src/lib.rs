@@ -83,6 +83,7 @@ pub mod net;
 pub mod rest_error;
 pub mod services;
 mod simple_crypto;
+pub mod spam_classification;
 pub mod tutanota_constants;
 pub mod type_model_provider;
 mod typed_entity_client;
@@ -604,6 +605,24 @@ impl LoggedInSdk {
 	#[must_use]
 	pub fn blob_facade(&self) -> Arc<BlobFacade> {
 		self.blob_facade.clone()
+	}
+
+	#[must_use]
+	pub fn spam_notification_filter(
+		&self,
+	) -> Arc<crate::spam_classification::filter::SpamNotificationFilter> {
+		Arc::new(
+			crate::spam_classification::filter::SpamNotificationFilter::new(
+				self.entity_client.clone(),
+				self.entity_facade.clone(),
+				self.crypto_entity_client.clone(),
+				self.instance_mapper.clone(),
+				self.service_executor.clone(),
+				self.type_model_provider.clone(),
+				self.user_facade.clone(),
+				self.contact_facade.clone(),
+			),
+		)
 	}
 }
 

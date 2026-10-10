@@ -31,7 +31,10 @@ use crate::tutanota_constants::SYSTEM_GROUP_MAIL_ADDRESS;
 use crate::type_model_provider::TypeModelProvider;
 #[cfg_attr(test, mockall_double::double)]
 use crate::user_facade::UserFacade;
-use crate::{ApiCallError, GeneratedId, IdTupleCustom, ListLoadDirection};
+use crate::{ApiCallError, CustomId, GeneratedId, IdTupleCustom, ListLoadDirection};
+use base64::prelude::BASE64_URL_SAFE_NO_PAD;
+use base64::Engine;
+use crypto_primitives::randomizer_facade::RandomizerFacade;
 use std::sync::Arc;
 
 const AUTH_STATUS_AUTHENTICATED: i64 = 0;
@@ -129,7 +132,12 @@ impl SpamNotificationFilter {
 					archiveDataType: None,
 					write: None,
 					read: Some(BlobReadData {
-						_id: None,
+						_id: Some(CustomId(
+							BASE64_URL_SAFE_NO_PAD.encode(
+								RandomizerFacade::from_core(rand_core::OsRng)
+									.generate_random_array::<4>(),
+							),
+						)),
 						archiveId: details_id.list_id.clone(),
 						instanceListId: None,
 						instanceIds: vec![],

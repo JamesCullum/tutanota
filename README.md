@@ -1,3 +1,13 @@
+> [!NOTE]
+> **Unofficial fork.** This branch adds one change to the Android app: no push notifications for mails that the app's
+> own spam classifier will move to the spam folder. Tuta isn't accepting additions to the Rust SDK at the moment, which
+> this change builds on (see [#10870](https://github.com/tutao/tutanota/pull/10870)), so it is maintained here instead.
+>
+> A daily workflow applies the change to each new upstream Android release and publishes the APK under
+> [Releases](https://github.com/JamesCullum/tutanota/releases). It is signed with a different key than the official
+> app, so uninstall that first (you log in again and the spam model is retrained). These builds are not affiliated with
+> or supported by Tuta, please don't report issues with them upstream.
+
 <div align="center">
 	<a href="https://tuta.com/" target="_blank"><img src="resources/images/logo-red.svg" alt="Tuta Mail logo" width="300"></a>
 	<br/>

@@ -1,16 +1,11 @@
-//! Spam classifier feature extraction, must produce exactly the web client's model input.
-
 use super::farmhash::hash_bucket;
 use super::html_entities::HTML_ENTITIES;
 use regex::{NoExpand, Regex};
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
-/// Must match `DEFAULT_VECTOR_MAX_LENGTH` in TutanotaConstants.ts
 pub const VECTOR_DIMENSION: usize = 2048;
-/// Must match `MAX_WORD_FREQUENCY` in TutanotaConstants.ts
 const MAX_WORD_FREQUENCY: u8 = 31;
-/// Must match `BYTES_FOR_SERVER_CLASSIFICATION_DATA` in SpamMailProcessor.ts
 pub const SERVER_CLASSIFICATION_DIMENSION: usize = 256;
 
 /// The JS `\s` character set (WhiteSpace + LineTerminator)
@@ -61,7 +56,6 @@ impl Pattern {
 		before_ok && after_ok
 	}
 
-	/// JS `String.prototype.replaceAll(globalRegex, replacement)`
 	fn replace_all(&self, text: &str, replacement: &str) -> String {
 		let expand = replacement.contains('$');
 		if self.not_preceded_by.is_none() && self.not_followed_by.is_none() {
@@ -192,7 +186,6 @@ fn is_js_whitespace(c: char) -> bool {
 	)
 }
 
-/// `htmlToText` from IndexUtils.ts
 pub fn html_to_text(html: &str) -> String {
 	let text = PATTERNS.html_tag.replace_all(html, NoExpand(" "));
 	let mut out = String::with_capacity(text.len());
@@ -251,7 +244,6 @@ fn entity_replacement(entity: &str) -> Option<EntityReplacement> {
 	}
 }
 
-/// JS `Number(s)` for a string made of `[#0-9a-zA-Z]` characters. `None` means NaN.
 fn js_string_to_number(s: &str) -> Option<f64> {
 	if s.is_empty() {
 		return Some(0.0);
@@ -311,7 +303,6 @@ fn js_string_to_number(s: &str) -> Option<f64> {
 	s.parse::<f64>().ok()
 }
 
-/// JS `ToUint16`, as applied by `String.fromCharCode`
 fn js_to_uint16(n: f64) -> u16 {
 	if !n.is_finite() {
 		return 0;
@@ -321,7 +312,6 @@ fn js_to_uint16(n: f64) -> u16 {
 	modulo as u16
 }
 
-/// `SpamMailProcessor.preprocessMail` with `DEFAULT_PREPROCESS_CONFIGURATION`
 pub fn preprocess_mail(mail: &SpamMailDatum) -> String {
 	let mail_text = concat_subject_and_body(mail);
 
@@ -364,7 +354,6 @@ fn concat_subject_and_body(mail: &SpamMailDatum) -> String {
 	}
 }
 
-/// Must match END_OF_WORD_CHARS in Tokenizer.ts
 fn is_end_of_word_char(c: char) -> bool {
 	matches!(
 		c,
@@ -388,7 +377,6 @@ fn is_end_of_word_char(c: char) -> bool {
 	)
 }
 
-/// `tokenize` from Tokenizer.ts
 pub fn tokenize(text: &str) -> Vec<String> {
 	text.split(is_end_of_word_char)
 		.filter_map(|word| {
@@ -402,7 +390,6 @@ pub fn tokenize(text: &str) -> Vec<String> {
 		.collect()
 }
 
-/// `HashingVectorizer.vectorize` (tensorHash variant) with the default dimension
 pub fn vectorize(tokens: &[String]) -> Vec<u8> {
 	let mut vector = vec![0u8; VECTOR_DIMENSION];
 	for token in tokens {
@@ -414,7 +401,6 @@ pub fn vectorize(tokens: &[String]) -> Vec<u8> {
 	vector
 }
 
-/// JS `parseInt(s)` (radix 10). `None` means NaN.
 fn js_parse_int(s: &str) -> Option<i64> {
 	let s = s.trim_start_matches(is_js_whitespace);
 	let (negative, digits) = match s.as_bytes().first() {
@@ -433,7 +419,6 @@ fn js_parse_int(s: &str) -> Option<i64> {
 	Some(if negative { -value } else { value })
 }
 
-/// `SpamMailProcessor.oneHotEncodeServerClassifiers`, `None` where the JS prediction would fail
 pub fn one_hot_encode_server_classifiers(server_classification_data: &str) -> Option<Vec<f32>> {
 	let mut result = vec![0f32; SERVER_CLASSIFICATION_DIMENSION];
 	for tuple in server_classification_data.split(':') {
@@ -458,7 +443,6 @@ pub fn one_hot_encode_server_classifiers(server_classification_data: &str) -> Op
 	Some(result)
 }
 
-/// `extractServerClassifiers` from SpamMailProcessor.ts
 pub fn extract_server_classifiers(server_classification_data: &str) -> Vec<Option<i64>> {
 	server_classification_data
 		.split(':')
@@ -466,7 +450,6 @@ pub fn extract_server_classifiers(server_classification_data: &str) -> Vec<Optio
 		.collect()
 }
 
-/// `SpamMailProcessor.processSpamMailDatum`
 pub fn create_model_input(mail: &SpamMailDatum) -> Option<Vec<f32>> {
 	let preprocessed = preprocess_mail(mail);
 	let tokens = tokenize(&preprocessed);

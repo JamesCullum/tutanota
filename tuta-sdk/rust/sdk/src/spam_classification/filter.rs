@@ -114,7 +114,6 @@ impl SpamNotificationFilter {
 		Ok((mail, session_key))
 	}
 
-	/// `MailFacade.loadMailDetailsBlob`
 	async fn load_mail_details(
 		&self,
 		mail: &Mail,
@@ -330,8 +329,6 @@ impl SpamNotificationFilter {
 
 #[uniffi::export]
 impl SpamNotificationFilter {
-	/// Whether the app will move a newly received mail to spam. `spam_model` is the stored
-	/// `spam_classification_model.model` of the mail's mailbox.
 	pub async fn check_new_mail(
 		&self,
 		mail_id: IdTupleGenerated,
@@ -353,12 +350,10 @@ fn verdict(
 	}
 }
 
-/// `cleanMailAddress` from CommonCalendarUtils / FormatUtils
 fn clean_mail_address(address: &str) -> String {
 	address.trim().to_lowercase()
 }
 
-/// `isTutaTeamMail` from SharedMailUtils.ts, without the encryption auth check (fails open)
 fn is_tuta_team_mail(mail: &Mail) -> bool {
 	let address = mail.sender.address.as_str();
 	mail.confidential
@@ -372,7 +367,6 @@ fn addresses(list: &[MailAddress]) -> Vec<&str> {
 	list.iter().map(|a| a.address.as_str()).collect()
 }
 
-/// `joinNamesAndMailAddresses` from SpamMailProcessor.ts
 fn join_names_and_mail_addresses(addresses: &[MailAddress]) -> String {
 	addresses
 		.iter()
@@ -381,7 +375,6 @@ fn join_names_and_mail_addresses(addresses: &[MailAddress]) -> String {
 		.join(" ")
 }
 
-/// `convertAuthStatusToSpamCategorizationToken` from SpamMailProcessor.ts
 fn auth_status_token(auth_status: Option<i64>) -> &'static str {
 	match auth_status {
 		Some(0) => "TAUTHENTICATED",
@@ -393,7 +386,6 @@ fn auth_status_token(auth_status: Option<i64>) -> &'static str {
 	}
 }
 
-/// `createSpamMailDatum` from SpamMailProcessor.ts
 pub fn create_spam_mail_datum(mail: &Mail, details: &MailDetails) -> SpamMailDatum {
 	SpamMailDatum {
 		subject: mail.subject.clone(),

@@ -1,5 +1,3 @@
-//! The web client's spam decision for new mails, failing open where it cannot be reproduced.
-
 mod farmhash;
 pub mod filter;
 mod html_entities;
@@ -8,12 +6,10 @@ pub mod preprocess;
 
 use preprocess::extract_server_classifiers;
 
-/// Must match `SERVER_CLASSIFIERS_TO_TRUST` in SpamClassificationHandler.ts
 pub const SERVER_CLASSIFIERS_TO_TRUST: &[i64] = &[6, 28, 2, 27, 23, 26, 22, 14, 5, 4, 8];
 
 const PHISHING_STATUS_SUSPICIOUS: i64 = 1;
 
-/// Must match `InboxRuleType` in Utils.ts
 mod inbox_rule_type {
 	pub const FROM_EQUALS: &str = "0";
 	pub const RECIPIENT_TO_EQUALS: &str = "1";
@@ -30,7 +26,6 @@ pub enum SourceFolder {
 	Other,
 }
 
-/// See `SpamClassificationHandler.isMailFromTrustedSender`
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SenderTrust {
 	pub is_contact: bool,
@@ -48,7 +43,6 @@ impl SenderTrust {
 pub enum RuleMatch {
 	Match,
 	NoMatch,
-	/// e.g. a regular expression rule
 	Unknown,
 }
 
@@ -77,7 +71,6 @@ pub enum SpamDecisionReason {
 	NoModel,
 }
 
-/// Whether the web client would move the new mail to the spam folder
 pub fn decide(facts: &NewMailFacts) -> (bool, SpamDecisionReason) {
 	if facts.source_folder == SourceFolder::Other {
 		return (false, SpamDecisionReason::NotInInboxOrSpam);
@@ -117,7 +110,6 @@ pub fn decide(facts: &NewMailFacts) -> (bool, SpamDecisionReason) {
 			SpamDecisionReason::TrustedServerClassifier,
 		);
 	}
-	// `(await this.spamClassifier.predict(...)) ?? false`
 	let reason = if facts.model_says_spam.is_some() {
 		SpamDecisionReason::ClientModel
 	} else {
@@ -126,7 +118,6 @@ pub fn decide(facts: &NewMailFacts) -> (bool, SpamDecisionReason) {
 	(facts.model_says_spam.unwrap_or(false), reason)
 }
 
-/// `isRegularExpression` from FormatUtils.ts
 fn is_regular_expression(value: &str) -> bool {
 	if value.len() < 2 || !value.starts_with('/') {
 		return false;
@@ -146,7 +137,6 @@ fn is_regular_expression(value: &str) -> bool {
 	}
 }
 
-/// `_checkEmailAddresses` from InboxRuleHandler.ts
 fn check_email_addresses<'a>(
 	addresses: impl IntoIterator<Item = &'a str>,
 	value: &str,
@@ -170,7 +160,6 @@ fn check_email_addresses<'a>(
 	}
 }
 
-/// `_checkContainsRule` from InboxRuleHandler.ts
 fn check_contains(text: &str, value: &str) -> RuleMatch {
 	if text.contains(value) {
 		RuleMatch::Match
@@ -190,7 +179,6 @@ pub struct InboxRuleSubject<'a> {
 	pub headers: Option<&'a str>,
 }
 
-/// `checkInboxRule` from InboxRuleHandler.ts
 pub fn check_inbox_rule(rule_type: &str, value: &str, mail: &InboxRuleSubject) -> RuleMatch {
 	match rule_type {
 		inbox_rule_type::FROM_EQUALS => check_email_addresses(mail.from.iter().copied(), value),

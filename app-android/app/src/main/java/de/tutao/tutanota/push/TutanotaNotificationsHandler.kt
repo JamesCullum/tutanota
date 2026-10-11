@@ -339,7 +339,7 @@ class TutanotaNotificationsHandler(
 			}
 		}
 
-		// the app only moves mails to spam while it is running, so skip notifications for those it will move
+		// the app only moves mails to spam while running
 		val spamVerdict = try {
 			loggedInSdk.spamNotificationFilter().checkNewMail(mailId, spamModel)
 		} catch (e: Exception) {

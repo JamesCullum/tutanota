@@ -1,5 +1,3 @@
-//! Port of tfjs-core `fingerPrint64` (hash_util.ts), must stay bit-identical to it.
-
 const K0: u64 = 0xc3a5c85c97cb3127;
 const K1: u64 = 0xb492b66fbe98f273;
 const K2: u64 = 0x9ae16a3b2f90404f;
@@ -224,7 +222,6 @@ pub fn fingerprint64(s: &[u8]) -> u64 {
 	)
 }
 
-/// `tf.string.stringToHashBucketFast` for a single token
 pub fn hash_bucket(token: &str, num_buckets: u64) -> usize {
 	(fingerprint64(token.as_bytes()) % num_buckets) as usize
 }

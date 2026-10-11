@@ -73,7 +73,6 @@ impl EntityClient {
 		Ok(parsed_entity)
 	}
 
-	/// Loads blob element instances (e.g. `MailDetailsBlob`), like `EntityRestClient.loadMultipleBlobElements`
 	#[allow(dead_code)] // test builds use the mock instead
 	pub async fn load_blob_elements(
 		&self,

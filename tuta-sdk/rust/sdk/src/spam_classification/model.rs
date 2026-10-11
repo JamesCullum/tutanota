@@ -1,11 +1,7 @@
-//! Evaluates the tfjs model stored by SpamClassifierStorageFacade.ts (Dense layers only).
-
 use minicbor::data::Type;
 use minicbor::Decoder;
 
-/// Must match `LOCAL_SPAM_CLASSIFICATION_STORAGE_VERSION` in SpamClassifierStorageFacade.ts
 const STORAGE_VERSION: u64 = 1;
-/// Must match `DEFAULT_PREDICTION_THRESHOLD` in SpamClassifier.ts
 const DEFAULT_PREDICTION_THRESHOLD: f64 = 0.55;
 
 #[derive(Debug, thiserror::Error)]
@@ -255,7 +251,6 @@ impl SpamModel {
 		Ok(activations[0])
 	}
 
-	/// `SpamClassifier.calculateThreshold`
 	pub fn threshold(&self) -> f64 {
 		let ham_to_spam_ratio = self.ham_count / self.spam_count;
 		let mut threshold = -0.1 * (ham_to_spam_ratio * 10.0).log10() + 0.65;
@@ -267,7 +262,6 @@ impl SpamModel {
 		threshold
 	}
 
-	/// `SpamClassifier.predict`: `prediction > threshold`
 	pub fn is_spam(&self, input: &[f32]) -> Result<(bool, f32), SpamModelError> {
 		let probability = self.predict_probability(input)?;
 		Ok((f64::from(probability) > self.threshold(), probability))

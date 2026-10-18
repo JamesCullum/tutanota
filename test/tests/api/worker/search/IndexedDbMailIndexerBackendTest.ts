@@ -1,4 +1,4 @@
-import o from "@tutao/otest"
+import o, { assertThrows } from "@tutao/otest"
 import { clientInitializedTypeModelResolver, createTestEntity, makePopulatedClientModelInfo } from "../../../TestUtils"
 import {
 	AttributeModel,
@@ -15,6 +15,7 @@ import { AttributeHandler, SearchIndexEntry } from "../../../../../src/applicati
 import { Metadata } from "../../../../../src/applications/common/api/worker/search/IndexTables"
 import { _createNewIndexUpdate, typeRefToTypeInfo } from "../../../../../src/applications/common/api/common/utils/IndexUtils"
 import { assertNotNull } from "../../../../../src/platform-kit/utils"
+import { ProgrammingError } from "../../../../../src/platform-kit/app-env"
 
 import {
 	BodyTypeRef,
@@ -51,6 +52,15 @@ o.spec("IndexedDbMailIndexerBackend", () => {
 		o.test("disabled", async () => {
 			when(core.getMetadata(Metadata.mailIndexingEnabled)).thenResolve(false)
 			o.check(await backend.isMailIndexingEnabled()).equals(false)
+		})
+	})
+
+	o.spec("mailBodyIndexTimestamp", () => {
+		o.test("is always null", async () => {
+			o.check(await backend.getMailBodyIndexTimestamp()).equals(null)
+		})
+		o.test("cannot be set", async () => {
+			await assertThrows(ProgrammingError, async () => backend.setMailBodyIndexTimestamp(123))
 		})
 	})
 

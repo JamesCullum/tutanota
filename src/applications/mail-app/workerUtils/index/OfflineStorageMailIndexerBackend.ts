@@ -58,6 +58,14 @@ export class OfflineStorageMailIndexerBackend implements MailIndexerBackend {
 		await this.persistence.deleteMailData(mailId)
 	}
 
+	async getMailBodyIndexTimestamp(): Promise<number | null> {
+		return await this.persistence.getMailBodyIndexTimestamp()
+	}
+
+	async setMailBodyIndexTimestamp(timestamp: number | null): Promise<void> {
+		await this.persistence.setMailBodyIndexTimestamp(timestamp)
+	}
+
 	async resetIndex() {
 		await this.persistence.resetMailIndex()
 	}

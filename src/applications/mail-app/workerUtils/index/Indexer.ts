@@ -25,8 +25,9 @@ export interface Indexer {
 	 * Does nothing if it is already at least as far back as the timestamp.
 	 *
 	 * @param time timestamp
+	 * @param includeMailBodies whether mails older than the current mail body index timestamp are indexed with their body
 	 */
-	extendMailIndex(time: number): Promise<void>
+	extendMailIndex(time: number, includeMailBodies?: boolean): Promise<void>
 
 	deleteIndex(userId: string): Promise<void>
 

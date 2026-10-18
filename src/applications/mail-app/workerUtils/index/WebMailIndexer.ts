@@ -44,6 +44,9 @@ import { FileImportStatus, ImapFolderSyncStatus, MailImportType, MailSetKind } f
 import { isFolder } from "../../mail/MailUtils"
 import { User } from "@tutao/entities/sys"
 import {
+	createBody,
+	createMailDetails,
+	createRecipients,
 	File,
 	ImapFolderSyncStateTypeRef,
 	ImportedFileMailTypeRef,
@@ -103,6 +106,14 @@ export class WebMailIndexer implements MailIndexer {
 		return this._currentIndexTimestamp
 	}
 
+	// {@link currentMailBodyIndexTimestamp}: the **oldest** timestamp down to which mails are indexed with their body.
+	// Mails older than this (but newer than {@link currentIndexTimestamp}) are indexed with their headers only.
+	// null if all indexed mails are indexed with their body.
+	private _currentMailBodyIndexTimestamp: number | null = null
+	get currentMailBodyIndexTimestamp(): number | null {
+		return this._currentMailBodyIndexTimestamp
+	}
+
 	private _mailIndexingEnabled: boolean
 	private initialized: DeferredObject<void> = defer()
 
@@ -140,24 +151,33 @@ export class WebMailIndexer implements MailIndexer {
 		this._backend = this.backendFactory(elementIdToId(user._id))
 		this._mailIndexingEnabled = await this.backend.isMailIndexingEnabled()
 		await this.updateCurrentIndexTimestamp(user)
+		this._currentMailBodyIndexTimestamp = (await this.backend.getMailBodyIndexTimestamp()) ?? null
 		this.initialized.resolve()
 	}
 
-	private async getMailboxIndexDatasForGroups(mailGroups: readonly Id[], oldestTimestamp: number): Promise<MboxIndexData[]> {
+	/**
+	 * @param oldestTimestamp only groups that are indexed further than this are returned
+	 * @param bodyBackfillStart if set, instead return the groups that are indexed further back than this timestamp, starting from it
+	 */
+	private async getMailboxIndexDatasForGroups(mailGroups: readonly Id[], oldestTimestamp: number, bodyBackfillStart?: number): Promise<MboxIndexData[]> {
 		const mailBoxes: Array<{ mbox: MailBox; newestTimestamp: number }> = []
 		const timestamps = await this.backend.getCurrentIndexTimestamps(mailGroups)
 
 		for (const mailGroupId of mailGroups) {
 			// group data is not available if group has been added. group will be indexed after login.
 			const groupTimestamp = timestamps.get(mailGroupId)
-			if (groupTimestamp) {
+			// a fully indexed group (FULL_INDEXED_TIMESTAMP) has nothing left to extend but may still need its bodies
+			const canIndex = bodyBackfillStart != null ? groupTimestamp !== NOTHING_INDEXED_TIMESTAMP : groupTimestamp
+			if (groupTimestamp != null && canIndex) {
 				const mailboxGroupRoot = await this.entityClient.load(MailboxGroupRootTypeRef, idToElementId(mailGroupId))
 				const mailbox = await this.entityClient.load(MailBoxTypeRef, idToElementId(mailboxGroupRoot.mailbox))
 				// if nothing was indexed set highest (read: later) end to be the beginning of tomorrow so that
 				// the entirety of today is included.
-				const newestTimestamp = groupTimestamp === NOTHING_INDEXED_TIMESTAMP ? this._dateProvider.getStartOfDayShiftedBy(1).getTime() : groupTimestamp
+				const newestTimestamp =
+					bodyBackfillStart ??
+					(groupTimestamp === NOTHING_INDEXED_TIMESTAMP ? this._dateProvider.getStartOfDayShiftedBy(1).getTime() : groupTimestamp)
 
-				if (newestTimestamp > oldestTimestamp) {
+				if (newestTimestamp > oldestTimestamp && (bodyBackfillStart == null || groupTimestamp < bodyBackfillStart)) {
 					mailBoxes.push({
 						mbox: mailbox,
 						newestTimestamp,
@@ -219,8 +239,11 @@ export class WebMailIndexer implements MailIndexer {
 	/**
 	 * Indexes all mailboxes of the given user up to the endIndexTimestamp if mail indexing is enabled.
 	 * If the mailboxes are already fully indexed, they are not indexed again.
+	 * Mails older than the mail body index timestamp are indexed without their body.
+	 *
+	 * @param backfillMailBodies whether to first index the bodies of the mails between the mail body index timestamp and the current index timestamp
 	 */
-	async indexMailboxes(user: User, oldestTimestamp: number): Promise<void> {
+	async indexMailboxes(user: User, oldestTimestamp: number, backfillMailBodies: boolean = false): Promise<void> {
 		await this.initialized.promise
 
 		if (!this._mailIndexingEnabled) {
@@ -242,16 +265,41 @@ export class WebMailIndexer implements MailIndexer {
 		const mailGroups = filterMailMemberships(user).map((membership) => membership.group)
 
 		try {
+			const bodyBackfillStart = backfillMailBodies ? this._currentMailBodyIndexTimestamp : null
+			const hasBodyBackfill = bodyBackfillStart != null && this.currentIndexTimestamp < bodyBackfillStart
+			const bodyBackfillDatas = hasBodyBackfill ? await this.getMailboxIndexDatasForGroups(mailGroups, this.currentIndexTimestamp, bodyBackfillStart) : []
 			const mailboxIndexDatas: Array<MboxIndexData> = await this.getMailboxIndexDatasForGroups(mailGroups, oldestTimestamp)
 
-			if (isNotEmpty(mailboxIndexDatas)) {
+			if (isNotEmpty(bodyBackfillDatas) || isNotEmpty(mailboxIndexDatas)) {
 				const indexLoader = await this.bulkLoaderFactory()
 				const newestTimestamp = mailboxIndexDatas.reduce((acc, data) => Math.max(acc, data.newestTimestamp), 0)
-				const progress = new ProgressMonitor(newestTimestamp - oldestTimestamp, (progress) => {
+				const backfillWork = isNotEmpty(bodyBackfillDatas) ? assertNotNull(bodyBackfillStart) - this.currentIndexTimestamp : 0
+				const indexWork = isNotEmpty(mailboxIndexDatas) ? newestTimestamp - oldestTimestamp : 0
+				const progress = new ProgressMonitor(backfillWork + indexWork, (progress) => {
 					this.infoMessageHandler.onSearchIndexStateUpdate(searchIndexStageInfo({ progress }))
 				})
 
-				await this._indexMailLists(mailboxIndexDatas, [newestTimestamp, oldestTimestamp], progress, indexLoader, searchIndexStageInfo, user)
+				if (isNotEmpty(bodyBackfillDatas)) {
+					await this._indexMailLists(
+						bodyBackfillDatas,
+						[assertNotNull(bodyBackfillStart), this.currentIndexTimestamp],
+						progress,
+						indexLoader,
+						searchIndexStageInfo,
+						user,
+						true,
+					)
+				}
+				if (backfillMailBodies && this._currentMailBodyIndexTimestamp != null) {
+					// all indexed mails have their body now
+					await this.setMailBodyIndexTimestamp(null)
+				}
+
+				if (isNotEmpty(mailboxIndexDatas)) {
+					await this._indexMailLists(mailboxIndexDatas, [newestTimestamp, oldestTimestamp], progress, indexLoader, searchIndexStageInfo, user)
+				}
+			} else if (backfillMailBodies && this._currentMailBodyIndexTimestamp != null) {
+				await this.setMailBodyIndexTimestamp(null)
 			}
 
 			await this.infoMessageHandler.onSearchIndexStateUpdate(searchIndexStageInfo({ progress: 0 }))
@@ -308,6 +356,10 @@ export class WebMailIndexer implements MailIndexer {
 			const backend = assertNotNull(this._backend, "MailIndexer#init wasn't called yet!")
 			await backend.truncateAllCurrentIndexTimestamps(newTimestamp)
 			await this.updateCurrentIndexTimestamp(user)
+			if (this._currentMailBodyIndexTimestamp != null && this._currentMailBodyIndexTimestamp <= newTimestamp) {
+				// the mails without body are gone, all remaining ones have it
+				await this.setMailBodyIndexTimestamp(null)
+			}
 
 			// Inform the UI that it's changed.
 			//
@@ -321,9 +373,19 @@ export class WebMailIndexer implements MailIndexer {
 					aimedMailIndexTimestamp: this.currentIndexTimestamp,
 					indexedMailCount: 0,
 					failedIndexingUpTo: null,
+					...this.bodyIndexTimestampInfo(),
 				})
 			}
 		}
+	}
+
+	private bodyIndexTimestampInfo(): Pick<SearchIndexStateInfo, "currentMailBodyIndexTimestamp"> {
+		return this._currentMailBodyIndexTimestamp != null ? { currentMailBodyIndexTimestamp: this._currentMailBodyIndexTimestamp } : {}
+	}
+
+	private async setMailBodyIndexTimestamp(timestamp: number | null): Promise<void> {
+		await this.backend.setMailBodyIndexTimestamp(timestamp)
+		this._currentMailBodyIndexTimestamp = timestamp
 	}
 
 	private createSearchIndexStageInfo(oldestTimestamp: number) {
@@ -338,10 +400,16 @@ export class WebMailIndexer implements MailIndexer {
 		}
 
 		return (info?: Partial<SearchIndexStateInfo>): SearchIndexStateInfo => {
-			return Object.assign(update, info, {
+			const result = Object.assign(update, info, {
 				currentMailIndexTimestamp: this.currentIndexTimestamp,
 				mailIndexEnabled: this._mailIndexingEnabled,
 			})
+			if (this._currentMailBodyIndexTimestamp != null) {
+				result.currentMailBodyIndexTimestamp = this._currentMailBodyIndexTimestamp
+			} else {
+				delete result.currentMailBodyIndexTimestamp
+			}
+			return result
 		}
 	}
 
@@ -352,6 +420,7 @@ export class WebMailIndexer implements MailIndexer {
 		indexLoader: BulkMailLoader,
 		update: (info?: Partial<SearchIndexStateInfo>) => SearchIndexStateInfo,
 		user: User,
+		backfillMailBodies: boolean = false,
 	): Promise<void> {
 		const mailboxesToWrite = mailboxIndexDatas.filter((mboxData) => rangeEnd < mboxData.newestTimestamp)
 		if (isEmpty(mailboxesToWrite)) {
@@ -361,7 +430,15 @@ export class WebMailIndexer implements MailIndexer {
 		let done = false
 		let batchStart = rangeStart
 		while (!done) {
-			const result = await this._indexMailListsInTimeBatches(mailboxesToWrite, [batchStart, rangeEnd], progress, indexLoader, update, user)
+			const result = await this._indexMailListsInTimeBatches(
+				mailboxesToWrite,
+				[batchStart, rangeEnd],
+				progress,
+				indexLoader,
+				update,
+				user,
+				backfillMailBodies,
+			)
 			// If there aren't any more mails in a mailbox that we can retrieve, we're done with those.
 			findAllAndRemove(mailboxesToWrite, (data) => this.isMailboxLoadedCompletely(data))
 
@@ -370,6 +447,10 @@ export class WebMailIndexer implements MailIndexer {
 		}
 	}
 
+	/**
+	 * @param backfillMailBodies index the mails again with their body, without changing the index timestamps of the groups. The mail body index timestamp is
+	 * moved with every written batch.
+	 */
 	// @VisibleForTesting
 	async _indexMailListsInTimeBatches(
 		mailboxesToWrite: readonly MboxIndexData[],
@@ -378,6 +459,7 @@ export class WebMailIndexer implements MailIndexer {
 		indexLoader: BulkMailLoader,
 		update: (info?: Partial<SearchIndexStateInfo>) => SearchIndexStateInfo,
 		user: User,
+		backfillMailBodies: boolean = false,
 	): Promise<{ batchEnd: number; done: boolean }> {
 		const mailSetEntriesToProcess: MailSetEntry[] = []
 		let batchStart = rangeStart
@@ -412,15 +494,18 @@ export class WebMailIndexer implements MailIndexer {
 				// 	const mailData = await this.processIndexMails(mailSetEntriesToProcess, indexLoader)
 				// 	// this._core._stats.mailcount += mailData.length
 				// })
-				const mailData = await abortAware(this.abortController, () => this.processIndexMails(mailSetEntriesToProcess, indexLoader))
+				const mailData = await abortAware(this.abortController, () => this.processIndexMails(mailSetEntriesToProcess, indexLoader, backfillMailBodies))
 
 				// this._core._stats.preparingTime += processTime
 
 				// only write to database if we have collected enough entities, or it's the last iteration
-				const indexTimestampPerGroup = new Map(
-					mailboxesToWrite.map((data) => [data.ownerGroup, this.isMailboxLoadedCompletely(data) ? FULL_INDEXED_TIMESTAMP : batchEnd]),
-				)
+				const indexTimestampPerGroup: Map<Id, number> = backfillMailBodies
+					? new Map()
+					: new Map(mailboxesToWrite.map((data) => [data.ownerGroup, this.isMailboxLoadedCompletely(data) ? FULL_INDEXED_TIMESTAMP : batchEnd]))
 				await this.backend.indexMails(indexTimestampPerGroup, mailData)
+				if (backfillMailBodies) {
+					await this.setMailBodyIndexTimestamp(batchEnd)
+				}
 				await this.updateCurrentIndexTimestamp(user)
 
 				update().indexedMailCount += mailData.length
@@ -446,12 +531,13 @@ export class WebMailIndexer implements MailIndexer {
 	private async processIndexMails(
 		mailSetEntries: Array<MailSetEntry>,
 		indexLoader: BulkMailLoader,
+		forceMailBodies: boolean,
 	): Promise<{ mail: Mail; mailDetails: MailDetails; attachments: File[] }[]> {
 		this.assertNotCancelled("processIndexMails")
 		const mails = await indexLoader.loadMailsFromMultipleLists(mailSetEntries.map((entry) => entry.mail))
 		let mailsWithoutErros = mails.filter((m) => !hasError(m))
 		console.log(TAG, `processIndexMails ${mails.at(0)?._id.at(0)} ${mails.length}`)
-		const mailsWithMailDetails = await indexLoader.loadMailDetails(mailsWithoutErros)
+		const mailsWithMailDetails = await this.loadMailDetailsForIndexing(indexLoader, mailsWithoutErros, forceMailBodies)
 		const files = await indexLoader.loadAttachments(mailsWithoutErros)
 		const mailsWithMailDetailsAndFiles = mailsWithMailDetails
 			.map((mailTuples) => {
@@ -464,6 +550,25 @@ export class WebMailIndexer implements MailIndexer {
 			.filter(isNotNull)
 		console.log(TAG, `processIndexMails done ${mails.at(0)?._id.at(0)} ${mails.length}`)
 		return mailsWithMailDetailsAndFiles
+	}
+
+	/**
+	 * Loads the mail details of the mails that are newer than the mail body index timestamp (or of all mails if {@param forceMailBodies}), the other mails get
+	 * placeholder mail details without a body so that they are indexed with their headers only.
+	 */
+	private async loadMailDetailsForIndexing(
+		indexLoader: BulkMailLoader,
+		mails: readonly Mail[],
+		forceMailBodies: boolean,
+	): Promise<{ mail: Mail; mailDetails: MailDetails }[]> {
+		const bodyIndexTimestamp = forceMailBodies ? null : this._currentMailBodyIndexTimestamp
+		if (bodyIndexTimestamp == null) {
+			return await indexLoader.loadMailDetails(mails)
+		}
+		const mailsWithBody = mails.filter((mail) => mail.receivedDate.getTime() >= bodyIndexTimestamp)
+		const mailsWithoutBody = mails.filter((mail) => mail.receivedDate.getTime() < bodyIndexTimestamp)
+		const mailsWithMailDetails = await indexLoader.loadMailDetails(mailsWithBody)
+		return mailsWithMailDetails.concat(mailsWithoutBody.map((mail) => ({ mail, mailDetails: createHeadersOnlyMailDetails(mail) })))
 	}
 
 	private assertNotCancelled(where: string) {
@@ -514,7 +619,7 @@ export class WebMailIndexer implements MailIndexer {
 	private async preloadMails(mailIds: IdTuple[]): Promise<MailWithDetailsAndAttachments[]> {
 		const indexLoader = await this.bulkLoaderFactory()
 		const mails = await indexLoader.loadMailsFromMultipleLists(mailIds)
-		const mailsWithDetails = await indexLoader.loadMailDetails(mails)
+		const mailsWithDetails = await this.loadMailDetailsForIndexing(indexLoader, mails, false)
 		const attachments = await indexLoader.loadAttachments(mails)
 		const attachmentsById = new Map(attachments.map((a) => [getElementId(a), a]))
 		return mailsWithDetails.map(({ mail, mailDetails }) => {
@@ -669,14 +774,52 @@ export class WebMailIndexer implements MailIndexer {
 			this.cancelMailIndexing()
 		}
 		const currentIndexTimestamp = this._currentIndexTimestamp
+		// resetting the index clears the persisted mail body index timestamp, but the rebuilt index must not download bodies it did not have before
+		const mailBodyIndexTimestamp = this._currentMailBodyIndexTimestamp
 		await this.backend.resetIndex()
+		await this.setMailBodyIndexTimestamp(mailBodyIndexTimestamp)
 		await this.updateCurrentIndexTimestamp(user)
 		await this.indexMailboxes(user, currentIndexTimestamp)
 	}
 
-	async extendMailIndex(user: User, aimedTimestamp: number): Promise<void> {
-		await this.indexMailboxes(user, aimedTimestamp)
+	/**
+	 * @param includeMailBodies if false, mails older than the current index timestamp are indexed without their body. If true, the bodies of mails indexed
+	 * without them are indexed first.
+	 */
+	async extendMailIndex(user: User, aimedTimestamp: number, includeMailBodies: boolean = true): Promise<void> {
+		await this.initialized.promise
+		if (
+			this._mailIndexingEnabled &&
+			!includeMailBodies &&
+			aimedTimestamp < this.currentIndexTimestamp &&
+			this.currentIndexTimestamp > FULL_INDEXED_TIMESTAMP
+		) {
+			const headersOnlyStart =
+				this.currentIndexTimestamp === NOTHING_INDEXED_TIMESTAMP ? this._dateProvider.getStartOfDayShiftedBy(1).getTime() : this.currentIndexTimestamp
+			if (this._currentMailBodyIndexTimestamp == null || this._currentMailBodyIndexTimestamp < headersOnlyStart) {
+				await this.setMailBodyIndexTimestamp(headersOnlyStart)
+			}
+		}
+		await this.indexMailboxes(user, aimedTimestamp, includeMailBodies)
 	}
+}
+
+/**
+ * Mail details for indexing a mail without its body: no body text and only the first recipient as recipient.
+ */
+function createHeadersOnlyMailDetails(mail: Mail): MailDetails {
+	return createMailDetails({
+		sentDate: mail.receivedDate,
+		authStatus: mail.authStatus ?? "0",
+		replyTos: [],
+		recipients: createRecipients({
+			toRecipients: mail.firstRecipient ? [mail.firstRecipient] : [],
+			ccRecipients: [],
+			bccRecipients: [],
+		}),
+		headers: null,
+		body: createBody({ text: "", compressedText: null }),
+	})
 }
 
 // Given all index timestamps find a common denominator.

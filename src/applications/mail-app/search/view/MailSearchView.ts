@@ -75,6 +75,7 @@ import { renderHeaderButtons } from "../../../calendar-app/gui/HeaderButtons"
 import { BottomNav } from "../../gui/BottomNav"
 import { MobileMailActionBar } from "../../mail/view/MobileMailActionBar"
 import { MobileMailMultiselectionActionBar } from "../../mail/view/MobileMailMultiselectionActionBar"
+import { Switch } from "../../../../ui/base/Switch"
 import { FilterChip } from "../../../../ui/base/FilterChip"
 import { formatDate } from "../../../../ui/utils/Formatter"
 import { createDropdown } from "../../../../ui/base/Dropdown"
@@ -190,6 +191,7 @@ export class MailSearchView extends BaseTopLevelView implements TopLevelView<Mai
 	private getResultColumnLayout(): Children {
 		return m(".flex.col.fill-absolute", [
 			Styles.get().isDesktopLayout() ? null : this.renderFilterBar(),
+			this.searchViewModel.isFreeAccountWithUnlimitedSearchRange() ? this.renderSearchAllMailDetailsSwitch() : null,
 			m(
 				".rel.flex-grow",
 				m(MailSearchListView, {
@@ -216,6 +218,7 @@ export class MailSearchView extends BaseTopLevelView implements TopLevelView<Mai
 						}
 					},
 					isIncompleteMailList: this.searchViewModel.isIncompleteMailList(),
+					isMailDetailSearchLimited: this.searchViewModel.isMailDetailSearchLimited(),
 					searchAndRecreateMailList: () => {
 						this.searchViewModel.searchAgainAndRecreateList()
 					},
@@ -247,6 +250,22 @@ export class MailSearchView extends BaseTopLevelView implements TopLevelView<Mai
 			} else return null
 		}
 	}
+	private renderSearchAllMailDetailsSwitch(): Children {
+		return m(".flex.col.gap-4.pl-16.pr-16.pb-8", [
+			m(
+				Switch,
+				{
+					checked: this.searchViewModel.getSearchAllMailDetails(),
+					onclick: (checked) => this.searchViewModel.setSearchAllMailDetails(checked),
+					ariaLabel: lang.getTranslationText("searchAllMailDetails_label"),
+					variant: "normal",
+				},
+				lang.getTranslationText("searchAllMailDetails_label"),
+			),
+			m(".small", lang.getTranslationText("searchAllMailDetails_msg")),
+		])
+	}
+
 	private renderFilterBar(): Children {
 		return m(".flex.gap-8.pl-16.pr-16.pt-8.pb-8.scroll-x", this.renderFilterChips())
 	}

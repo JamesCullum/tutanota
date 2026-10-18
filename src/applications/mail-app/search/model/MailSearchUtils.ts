@@ -18,7 +18,8 @@ import {
 import { SearchQuery } from "../../../common/search/SearchUtils"
 import { nanToNull } from "../../../../platform-kit/utils/Utils"
 import { compareMails } from "../../mail/model/MailUtils"
-import { EnvProvider } from "@tutao/app-env"
+import { EnvProvider, SessionType } from "@tutao/app-env"
+import type { UserController } from "../../../common/api/main/UserController"
 
 EnvProvider.assertMainOrNode()
 
@@ -69,6 +70,19 @@ export const SEARCH_MAIL_FIELDS: ReadonlyArray<SearchMailField> = [
 
 export function getFreeSearchStartDate(): Date {
 	return getStartOfDay(getDayShifted(new Date(), -FIXED_FREE_SEARCH_DAYS))
+}
+
+/**
+ * Free accounts may search their whole mailbox in the apps when they stay logged in. The mails older than the free
+ * time range are indexed without their text and all recipients unless the user opts in.
+ */
+export function isFreeAccountWithUnlimitedSearchRange(userController: UserController): boolean {
+	return (
+		userController.isFreeAccount() &&
+		EnvProvider.get().isOfflineStorageAvailable() &&
+		!EnvProvider.get().isFullArchiveSearchAvailable() &&
+		userController.sessionType === SessionType.Persistent
+	)
 }
 
 export function createMailRestriction({

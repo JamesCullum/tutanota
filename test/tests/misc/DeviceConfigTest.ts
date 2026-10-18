@@ -222,6 +222,7 @@ o.spec("DeviceConfig", function () {
 				isSetupComplete: true,
 				isCredentialsMigratedToNative: false,
 				offlineTimeRangeDateByUser: { userId1: getStartOfDay(getDayShifted(new Date(), -42)).getTime() },
+				searchAllMailDetailsByUser: {},
 				installationDate: getStartOfDay(new Date()).getTime().toString(),
 				isUndoSendEnabled: true,
 				collapsedMailGroups: {},

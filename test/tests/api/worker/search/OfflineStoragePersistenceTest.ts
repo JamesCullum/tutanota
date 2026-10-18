@@ -82,6 +82,25 @@ o.spec("OfflineStoragePersistence", () => {
 		})
 	})
 
+	o.spec("mailBodyIndexTimestamp", () => {
+		o.test("on fresh db", async () => {
+			o.check(await persistence.getMailBodyIndexTimestamp()).equals(null)
+		})
+		o.test("set, update and clear", async () => {
+			await persistence.setMailBodyIndexTimestamp(1234)
+			o.check(await persistence.getMailBodyIndexTimestamp()).equals(1234)
+			await persistence.setMailBodyIndexTimestamp(1000)
+			o.check(await persistence.getMailBodyIndexTimestamp()).equals(1000)
+			await persistence.setMailBodyIndexTimestamp(null)
+			o.check(await persistence.getMailBodyIndexTimestamp()).equals(null)
+		})
+		o.test("resetMailIndex clears it", async () => {
+			await persistence.setMailBodyIndexTimestamp(1234)
+			await persistence.resetMailIndex()
+			o.check(await persistence.getMailBodyIndexTimestamp()).equals(null)
+		})
+	})
+
 	o.test("getIndexedGroups", async () => {
 		const { mailGroupData, contactGroupData } = await prepareIndexedGroups(sqlCipherFacade)
 		o.check(await persistence.getIndexedGroups()).deepEquals([mailGroupData, contactGroupData])
@@ -273,6 +292,34 @@ o.spec("OfflineStoragePersistence", () => {
 		await assertNotFound("i am not smol squishy text")
 		await assertNotFound('"sender i am"')
 		await assertNotFound("very squishyy email")
+	})
+
+	o.test("storeMailData skips mails that are not in the cache and stores the rest", async () => {
+		const makeData = (elementId: Id, subject: string) => ({
+			mail: createTestEntity(MailTypeRef, {
+				_id: ["I am a list", elementId],
+				_ownerGroup: "I am a group",
+				subject,
+				sender: createTestEntity(MailAddressTypeRef, { name: "I am a sender", address: "testtesttest@test.test" }),
+				receivedDate: new Date(1234),
+				sets: [["mySets", "myFavoriteSet"]],
+			}),
+			mailDetails: createTestEntity(MailDetailsTypeRef, {
+				body: createTestEntity(BodyTypeRef, { compressedText: "text" }),
+				recipients: createTestEntity(RecipientsTypeRef, { toRecipients: [], ccRecipients: [], bccRecipients: [] }),
+			}),
+			attachments: [],
+		})
+		const uncached = makeData("z-z-z-z-z-z-z-z-a", "uncachedsubject")
+		const cached = makeData("z-z-z-z-z-z-z-z-b", "cachedsubject")
+		await fakeStoreListElementEntityInOfflineDb(sqlCipherFacade, cached.mail)
+
+		await persistence.storeMailData([uncached, cached])
+
+		const { query, params } = sql`SELECT rowid
+                                    from mail_index
+                                    where mail_index = ${"cachedsubject"}`
+		o.check(await sqlCipherFacade.get(query, params)).notEquals(null)
 	})
 
 	o.test("deleteMailData", async () => {

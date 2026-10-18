@@ -178,4 +178,16 @@ o.spec("OfflineStorageMailIndexerBackend", function () {
 		await backend.resetIndex()
 		verify(persistence.resetMailIndex())
 	})
+
+	o.test("getMailBodyIndexTimestamp", async function () {
+		when(persistence.getMailBodyIndexTimestamp()).thenResolve(1234)
+		o.check(await backend.getMailBodyIndexTimestamp()).equals(1234)
+	})
+
+	o.test("setMailBodyIndexTimestamp", async function () {
+		await backend.setMailBodyIndexTimestamp(1234)
+		verify(persistence.setMailBodyIndexTimestamp(1234))
+		await backend.setMailBodyIndexTimestamp(null)
+		verify(persistence.setMailBodyIndexTimestamp(null))
+	})
 })

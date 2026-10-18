@@ -145,6 +145,14 @@ export class IndexedDbMailIndexerBackend implements MailIndexerBackend {
 		throw new ProgrammingError("truncateAllCurrentIndexTimestamps can only be called with local-store storage")
 	}
 
+	async getMailBodyIndexTimestamp(): Promise<number | null> {
+		return null
+	}
+
+	setMailBodyIndexTimestamp(_timestamp: number | null): Promise<void> {
+		throw new ProgrammingError("setMailBodyIndexTimestamp can only be called with local-store storage")
+	}
+
 	async resetIndex() {
 		throw new ProgrammingError("resetIndex can only be called with local-store storage")
 	}

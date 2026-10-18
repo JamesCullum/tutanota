@@ -267,7 +267,7 @@ export class IndexedDbIndexer implements Indexer {
 		await this.eventQueue.waitForEmptyQueue()
 	}
 
-	async extendMailIndex(newOldestTimestamp: number): Promise<void> {
+	async extendMailIndex(newOldestTimestamp: number, _includeMailBodies: boolean = true): Promise<void> {
 		await this.initDeferred.promise
 		try {
 			this.eventQueue.pause()

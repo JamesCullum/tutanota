@@ -1,5 +1,11 @@
-import o from "@tutao/otest"
-import { FREE_MAIL_INDEX_DEFAULT_RANGE_DAYS, FULL_INDEXED_TIMESTAMP, NOTHING_INDEXED_TIMESTAMP, TimeConstants } from "../../../../../src/platform-kit/app-env"
+import o, { assertThrows } from "@tutao/otest"
+import {
+	CancelledError,
+	FREE_MAIL_INDEX_DEFAULT_RANGE_DAYS,
+	FULL_INDEXED_TIMESTAMP,
+	NOTHING_INDEXED_TIMESTAMP,
+	TimeConstants,
+} from "../../../../../src/platform-kit/app-env"
 import {
 	constructMailSetEntryId,
 	idToElementId,
@@ -29,6 +35,7 @@ import {
 	FileTypeRef,
 	Mail,
 	MailBagTypeRef,
+	MailAddressTypeRef,
 	MailBox,
 	MailboxGroupRootTypeRef,
 	MailBoxTypeRef,
@@ -387,6 +394,137 @@ o.spec("WebMailIndexer", () => {
 						attachments: [],
 					},
 				])
+			})
+
+			o.spec("mail bodies", function () {
+				// "2019-03-05T22:00:00.000Z", before mail0
+				const rangeEnd3 = getDayShifted(new Date(rangeEnd2), -1).getTime()
+				let requestedMailDetails: string[]
+
+				o.beforeEach(function () {
+					for (const [mail, timestamp] of [
+						[mail0, rangeEndShifted2Days],
+						[mail1, rangeEnd - 60 * 60 * 1000],
+						[mail2, rangeEnd + 60 * 60 * 1000],
+					] as const) {
+						mail.receivedDate = new Date(timestamp)
+					}
+					mail1.firstRecipient = createTestEntity(MailAddressTypeRef, { name: "first", address: "first@example.com" })
+					requestedMailDetails = []
+					const loadMailDetails = bulkMailLoader.loadMailDetails.bind(bulkMailLoader)
+					bulkMailLoader.loadMailDetails = (mails) => {
+						requestedMailDetails.push(...mails.map((mail) => mail.subject))
+						return loadMailDetails(mails)
+					}
+				})
+
+				async function initWithTimestamps(groupTimestamp: number, mailBodyIndexTimestamp: number | null) {
+					when(backend.getCurrentIndexTimestamps([mailGroup])).thenResolve(new Map([[mailGroup, groupTimestamp]]))
+					when(backend.getMailBodyIndexTimestamp()).thenResolve(mailBodyIndexTimestamp)
+					when(backend.isMailIndexingEnabled()).thenResolve(true)
+					await indexer.init(user)
+				}
+
+				o.test("extending without bodies indexes older mails without loading their details and sets the body timestamp", async function () {
+					await initWithTimestamps(rangeEnd, null)
+
+					await indexer.extendMailIndex(user, rangeEnd3, false)
+
+					verify(backend.setMailBodyIndexTimestamp(rangeEnd))
+					o.check(indexer.currentMailBodyIndexTimestamp).equals(rangeEnd)
+					o.check(requestedMailDetails).deepEquals([])
+					const mailsCaptor = matchers.captor()
+					verify(backend.indexMails(matchers.anything(), mailsCaptor.capture()))
+					const indexed: MailWithDetailsAndAttachments[] = mailsCaptor.value
+					o.check(indexed.map((data) => data.mail.subject).sort()).deepEquals(["mail0", "mail1"])
+					for (const data of indexed) {
+						o.check(data.mailDetails.body.text).equals("")
+						o.check(data.mailDetails.body.compressedText).equals(null)
+						o.check(data.mailDetails.recipients.ccRecipients).deepEquals([])
+						o.check(data.mailDetails.recipients.bccRecipients).deepEquals([])
+					}
+					o.check(indexed.find((data) => data.mail === mail1)!.mailDetails.recipients.toRecipients).deepEquals([mail1.firstRecipient!])
+					o.check(indexed.find((data) => data.mail === mail0)!.mailDetails.recipients.toRecipients).deepEquals([])
+				})
+
+				o.test("extending without bodies keeps the existing body timestamp if it is older than the index", async function () {
+					await initWithTimestamps(rangeEnd2, rangeEnd)
+
+					await indexer.extendMailIndex(user, rangeEnd3, false)
+
+					verify(backend.setMailBodyIndexTimestamp(matchers.anything()), { times: 0 })
+					o.check(indexer.currentMailBodyIndexTimestamp).equals(rangeEnd)
+					o.check(requestedMailDetails).deepEquals([])
+				})
+
+				o.test("body timestamp is reported in the search index state", async function () {
+					await initWithTimestamps(rangeEnd2, rangeEnd)
+
+					await indexer.indexMailboxes(user, rangeEnd2)
+
+					verify(infoMessageHandler.onSearchIndexStateUpdate(matchers.contains({ currentMailBodyIndexTimestamp: rangeEnd })))
+				})
+
+				o.test("extending with bodies backfills the bodies without changing the group timestamps", async function () {
+					await initWithTimestamps(rangeEnd2, rangeEnd)
+
+					await indexer.extendMailIndex(user, rangeEnd2, true)
+
+					const timestampsCaptor = matchers.captor()
+					const mailsCaptor = matchers.captor()
+					verify(backend.indexMails(timestampsCaptor.capture(), mailsCaptor.capture()), { times: 1 })
+					o.check(timestampsCaptor.value).deepEquals(new Map())
+					o.check(mailsCaptor.value).deepEquals([{ mail: mail1, mailDetails: details1.details, attachments: [] }])
+					o.check(requestedMailDetails).deepEquals(["mail1"])
+					// progress is kept per batch and cleared at the end
+					verify(backend.setMailBodyIndexTimestamp(rangeEnd2), { times: 1 })
+					verify(backend.setMailBodyIndexTimestamp(null), { times: 1 })
+					o.check(indexer.currentMailBodyIndexTimestamp).equals(null)
+				})
+
+				o.test("extending with bodies backfills and then extends with bodies", async function () {
+					await initWithTimestamps(rangeEnd2, rangeEnd)
+
+					await indexer.extendMailIndex(user, rangeEnd3, true)
+
+					const timestampsCaptor = matchers.captor()
+					const mailsCaptor = matchers.captor()
+					verify(backend.indexMails(timestampsCaptor.capture(), mailsCaptor.capture()), { times: 2 })
+					o.check(timestampsCaptor.values![0]).deepEquals(new Map())
+					o.check(timestampsCaptor.values![1]).deepEquals(new Map([[mailGroup, FULL_INDEXED_TIMESTAMP]]))
+					o.check(mailsCaptor.values![1]).deepEquals([{ mail: mail0, mailDetails: details0.details, attachments: [] }])
+					o.check(indexer.currentMailBodyIndexTimestamp).equals(null)
+				})
+
+				o.test("indexing without a request for bodies does not download bodies of mails older than the body timestamp", async function () {
+					await initWithTimestamps(rangeEnd2, rangeEnd)
+
+					// e.g. resuming indexing after a restart
+					await indexer.indexMailboxes(user, rangeEnd3)
+
+					o.check(requestedMailDetails).deepEquals([])
+					o.check(indexer.currentMailBodyIndexTimestamp).equals(rangeEnd)
+				})
+
+				o.test("rebuilding keeps the body timestamp", async function () {
+					await initWithTimestamps(rangeEnd2, rangeEnd)
+
+					await indexer.rebuildIndex(user)
+
+					verify(backend.resetIndex())
+					verify(backend.setMailBodyIndexTimestamp(rangeEnd))
+					o.check(requestedMailDetails).deepEquals([])
+				})
+
+				o.test("resizing to a newer timestamp than the body timestamp clears it", async function () {
+					await initWithTimestamps(rangeEnd2, rangeEnd)
+					when(backend.truncateAllCurrentIndexTimestamps(matchers.anything())).thenResolve(undefined)
+
+					await indexer.resizeMailIndex(user, rangeEnd + 1)
+
+					verify(backend.setMailBodyIndexTimestamp(null))
+					o.check(indexer.currentMailBodyIndexTimestamp).equals(null)
+				})
 			})
 		})
 
@@ -1069,6 +1207,64 @@ o.spec("WebMailIndexer", () => {
 			verify(bulkMailLoader.loadMailDetails(matchers.anything()), { times: loadMailDataRequests })
 			verify(bulkMailLoader.loadAttachments(matchers.anything()), { times: loadMailDataRequests })
 			verify(bulkMailLoader.loadMailsFromMultipleLists(matchers.anything()), { times: loadMailDataRequests })
+		})
+	})
+
+	o.spec("_indexMailListsInTimeBatches backfilling mail bodies", () => {
+		o.test("keeps the written progress when cancelled", async () => {
+			bulkMailLoader = object()
+			const rangeStart = TimeConstants.DAY_IN_MILLIS * MAIL_INDEXER_CHUNK * 3
+			const rangeEnd = 0
+			const mail = createTestEntity(MailTypeRef, { _id: ["helloooo", "I'm a mail!"] })
+			const mailWithDetails: MailWithMailDetails = {
+				mail,
+				mailDetails: createTestEntity(MailDetailsTypeRef, {
+					recipients: createTestEntity(RecipientsTypeRef),
+					body: createTestEntity(BodyTypeRef, { compressedText: "tiiiiiiiiiiiiiny" }),
+				}),
+			}
+			when(bulkMailLoader.loadMailSetEntriesForTimeRange(matchers.anything(), matchers.anything())).thenResolve([createTestEntity(MailSetEntryTypeRef)])
+			when(bulkMailLoader.loadMailsFromMultipleLists(matchers.anything())).thenResolve([mail])
+			when(bulkMailLoader.loadMailDetails(matchers.anything())).thenResolve([mailWithDetails])
+			when(bulkMailLoader.loadAttachments(matchers.anything())).thenResolve([])
+			const mboxData: MboxIndexData[] = [
+				{
+					mailSetListDatas: [{ listId: "helloooo", lastLoadedId: null, loadedButUnusedEntries: [], loadedCompletely: false }],
+					newestTimestamp: rangeStart,
+					ownerGroup: "hi I'm an owner group",
+				},
+			]
+			const progressMonitor: ProgressMonitor = object()
+			await initWithEnabled(true)
+
+			const firstBatch = await indexer._indexMailListsInTimeBatches(
+				mboxData,
+				[rangeStart, rangeEnd],
+				progressMonitor,
+				bulkMailLoader,
+				updateIndexingState,
+				user,
+				true,
+			)
+			o.check(firstBatch.done).equals(false)
+			verify(backend.indexMails(new Map(), [{ mail, mailDetails: mailWithDetails.mailDetails, attachments: [] }]))
+			verify(backend.setMailBodyIndexTimestamp(firstBatch.batchEnd), { times: 1 })
+
+			indexer.cancelMailIndexing()
+			const error = await assertThrows(CancelledError, () =>
+				indexer._indexMailListsInTimeBatches(
+					mboxData,
+					[firstBatch.batchEnd, rangeEnd],
+					progressMonitor,
+					bulkMailLoader,
+					updateIndexingState,
+					user,
+					true,
+				),
+			)
+			o.check(error instanceof CancelledError).equals(true)
+			verify(backend.setMailBodyIndexTimestamp(matchers.anything()), { times: 1 })
+			verify(backend.indexMails(matchers.anything(), matchers.anything()), { times: 1 })
 		})
 	})
 

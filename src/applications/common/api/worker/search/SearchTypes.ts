@@ -160,6 +160,8 @@ export type SearchIndexStateInfo = {
 	mailIndexEnabled: boolean
 	progress: number
 	currentMailIndexTimestamp: number
+	/** oldest timestamp up to which mails are indexed with their body. Not set if all indexed mails are indexed with their body */
+	currentMailBodyIndexTimestamp?: number
 	aimedMailIndexTimestamp: number
 	indexedMailCount: number
 	failedIndexingUpTo: number | null

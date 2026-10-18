@@ -45,5 +45,12 @@ export interface MailIndexerBackend {
 
 	isMailIndexingEnabled(): Promise<boolean>
 
+	/**
+	 * @return the oldest timestamp down to which mails are indexed with their body. null if all indexed mails have their body.
+	 */
+	getMailBodyIndexTimestamp(): Promise<number | null>
+
+	setMailBodyIndexTimestamp(timestamp: number | null): Promise<void>
+
 	resetIndex(): Promise<void>
 }

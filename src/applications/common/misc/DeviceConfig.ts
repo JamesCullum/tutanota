@@ -55,6 +55,8 @@ interface ConfigObject {
 	_testAssignments: PersistedAssignmentData | null
 	/** OfflineTimeRangeDateByUser: number - date in millis */
 	offlineTimeRangeDateByUser: Record<Id, number>
+	/** Whether free accounts also index the text and all recipients of older mails for search */
+	searchAllMailDetailsByUser: Record<Id, boolean>
 	conversationViewShowOnlySelectedMail: boolean
 	mailListDisplayMode: MailListDisplayMode
 	/** Stores each users' definition about contact synchronization */
@@ -149,6 +151,7 @@ export class DeviceConfig implements UsageTestStorage, NewsItemStorage, ThemeCon
 			_testAssignments: loadedConfig._testAssignments ?? null,
 			_signupToken: signupToken,
 			offlineTimeRangeDateByUser: loadedConfig.offlineTimeRangeDateByUser ?? {},
+			searchAllMailDetailsByUser: loadedConfig.searchAllMailDetailsByUser ?? {},
 			conversationViewShowOnlySelectedMail: loadedConfig.conversationViewShowOnlySelectedMail ?? false,
 			mailListDisplayMode: loadedConfig.mailListDisplayMode ?? MailListDisplayMode.CONVERSATIONS,
 			syncContactsWithPhonePreference: loadedConfig.syncContactsWithPhonePreference ?? {},
@@ -453,6 +456,15 @@ export class DeviceConfig implements UsageTestStorage, NewsItemStorage, ThemeCon
 
 	setOfflineTimeRangeDate(userId: Id, date: Date) {
 		this.config.offlineTimeRangeDateByUser[userId] = date.getTime()
+		this.writeToStorage()
+	}
+
+	getSearchAllMailDetails(userId: Id): boolean {
+		return this.config.searchAllMailDetailsByUser[userId] ?? false
+	}
+
+	setSearchAllMailDetails(userId: Id, enabled: boolean) {
+		this.config.searchAllMailDetailsByUser[userId] = enabled
 		this.writeToStorage()
 	}
 

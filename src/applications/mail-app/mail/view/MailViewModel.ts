@@ -987,10 +987,11 @@ export class MailViewModel {
 	}
 
 	async getSearchResult({ query, maxResults }: QuickSearchQuery): Promise<LiveSearchResult<Mail>> {
-		const { createMailRestriction, getFreeSearchStartDate } = await import("../../search/model/MailSearchUtils.js")
+		const { createMailRestriction, getFreeSearchStartDate, isFreeAccountWithUnlimitedSearchRange } = await import("../../search/model/MailSearchUtils.js")
+		const userController = this.logins.getUserController()
 		const restriction = createMailRestriction({
 			start: null,
-			end: this.logins.getUserController().isFreeAccount() ? getFreeSearchStartDate().getTime() : null,
+			end: userController.isFreeAccount() && !isFreeAccountWithUnlimitedSearchRange(userController) ? getFreeSearchStartDate().getTime() : null,
 			field: null,
 			folderIds: [],
 		})

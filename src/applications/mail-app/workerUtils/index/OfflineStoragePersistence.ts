@@ -116,6 +116,7 @@ export interface IndexedGroupData {
 export class OfflineStoragePersistence {
 	static readonly MAIL_INDEXING_ENABLED = "mailIndexingEnabled"
 	static readonly CONTACTS_INDEXED = "contactsIndexed"
+	static readonly MAIL_BODY_INDEX_TIMESTAMP = "mailBodyIndexTimestamp"
 
 	constructor(private readonly sqlCipherFacade: SqlCipherFacade) {}
 
@@ -182,7 +183,7 @@ export class OfflineStoragePersistence {
 		} of mailData) {
 			const rowid = await this.getRowid(MailTypeRef, mail._id)
 			if (rowid == null) {
-				return
+				continue
 			}
 
 			insertMailIndexParameters.push([
@@ -289,6 +290,31 @@ VALUES (
 		${indexed ? 1 : 0}
 		)`
 		await this.sqlCipherFacade.run(query, params)
+	}
+
+	/** @return the oldest timestamp down to which mails are indexed with their body, or null if all indexed mails have their body */
+	async getMailBodyIndexTimestamp(): Promise<number | null> {
+		const { query, params } = sql`SELECT CAST(value as NUMBER) as value
+									  FROM search_metadata
+									  WHERE key = ${OfflineStoragePersistence.MAIL_BODY_INDEX_TIMESTAMP}`
+		const row = await this.sqlCipherFacade.get(query, params)
+		return row == null ? null : (untagSqlObject(row).value as number)
+	}
+
+	async setMailBodyIndexTimestamp(timestamp: number | null): Promise<void> {
+		if (timestamp == null) {
+			const { query, params } = sql`DELETE
+										  FROM search_metadata
+										  WHERE key = ${OfflineStoragePersistence.MAIL_BODY_INDEX_TIMESTAMP}`
+			await this.sqlCipherFacade.run(query, params)
+		} else {
+			const { query, params } = sql`INSERT
+			OR REPLACE INTO search_metadata (key, value) VALUES (
+			${OfflineStoragePersistence.MAIL_BODY_INDEX_TIMESTAMP},
+			${timestamp}
+			)`
+			await this.sqlCipherFacade.run(query, params)
+		}
 	}
 
 	async getEncryptedMailDetailsBlobsArchives(): Promise<Id[]> {
@@ -491,6 +517,7 @@ VALUES (
 										  FROM content_mail_index`
 			await this.sqlCipherFacade.run(query, params)
 		}
+		await this.setMailBodyIndexTimestamp(null)
 	}
 
 	async removeImportQueueEntry(importedMails: Id) {

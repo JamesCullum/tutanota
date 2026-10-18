@@ -1565,6 +1565,7 @@ class MailLocator implements CommonLocator {
 				this.logins,
 				this.indexerFacade,
 				deviceConfig.getMailAutoSelectBehavior(),
+				deviceConfig,
 				conversationViewModelFactory,
 				this.mailOpenedListener,
 				dateProvider,

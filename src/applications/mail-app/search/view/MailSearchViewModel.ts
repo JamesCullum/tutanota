@@ -25,6 +25,7 @@ import {
 	createMailRestriction,
 	getFreeSearchStartDate,
 	getMailRestriction,
+	isFreeAccountWithUnlimitedSearchRange,
 	isIncompleteMailResult,
 	isSameSearchRestriction,
 	isSameSearchWithExtendedRange,
@@ -37,7 +38,7 @@ import { Indexer } from "../../workerUtils/index/Indexer"
 import { LoginController } from "../../../common/api/main/LoginController"
 import { isMailDeletable } from "../../mail/model/MailChecks"
 import { isPermanentDeleteAllowedForFolder } from "../../mail/MailUtils"
-import { ListAutoSelectBehavior } from "../../../common/misc/DeviceConfig"
+import { DeviceConfig, ListAutoSelectBehavior } from "../../../common/misc/DeviceConfig"
 import { getMailFilterForType, MailFilterType } from "../../mail/view/MailViewerUtils"
 import { MailOpenedListener } from "../../mail/view/MailViewModel"
 import { getStartOfTheWeekOffsetForUser } from "../../../common/misc/weekOffset"
@@ -112,6 +113,7 @@ export class MailSearchViewModel {
 		private readonly logins: LoginController,
 		private readonly indexerFacade: Indexer,
 		private readonly selectionBehavior: ListAutoSelectBehavior,
+		private readonly deviceConfig: DeviceConfig,
 		private readonly conversationViewModelFactory: ConversationViewModelFactory | null,
 		private readonly mailOpenedListener: MailOpenedListener | null,
 		private readonly dateProvider: DateProvider,
@@ -130,6 +132,39 @@ export class MailSearchViewModel {
 
 	isFreeAccount(): boolean {
 		return this.logins.getUserController().isFreeAccount()
+	}
+
+	isFreeAccountWithUnlimitedSearchRange(): boolean {
+		return isFreeAccountWithUnlimitedSearchRange(this.logins.getUserController())
+	}
+
+	getSearchAllMailDetails(): boolean {
+		return this.deviceConfig.getSearchAllMailDetails(this.getUserId())
+	}
+
+	setSearchAllMailDetails(enabled: boolean) {
+		this.deviceConfig.setSearchAllMailDetails(this.getUserId(), enabled)
+		if (enabled) {
+			// backfill the details of the mails that are already indexed, continuing an extension that is still running
+			const { currentMailIndexTimestamp, aimedMailIndexTimestamp } = this.search.indexState()
+			void this.indexerFacade.extendMailIndex(Math.min(currentMailIndexTimestamp, aimedMailIndexTimestamp), true)
+		}
+	}
+
+	/** whether mails older than the oldest one indexed with all details can be in the search result */
+	isMailDetailSearchLimited(): boolean {
+		const detailsIndexTimestamp = this.search.indexState().currentMailBodyIndexTimestamp
+		return (
+			this.isFreeAccountWithUnlimitedSearchRange() &&
+			!this.getSearchAllMailDetails() &&
+			detailsIndexTimestamp != null &&
+			this.startDate != null &&
+			this.startDate.getTime() < detailsIndexTimestamp
+		)
+	}
+
+	private shouldIndexAllMailDetails(): boolean {
+		return !this.isFreeAccount() || this.getSearchAllMailDetails()
 	}
 
 	isDriveEnabled(): boolean {
@@ -170,7 +205,7 @@ export class MailSearchViewModel {
 	}
 
 	onNewUrl(args: Record<string, any>, _requestedPath: string) {
-		const restriction = getMailRestriction(args, this.logins.getUserController().isFreeAccount())
+		const restriction = getMailRestriction(args, this.isFreeAccount() && !this.isFreeAccountWithUnlimitedSearchRange())
 
 		this.currentQuery = args.query ?? this.currentQuery
 		const newQuery: SearchQuery = { query: this.currentQuery, restriction, maxResults: SEARCH_PAGE_SIZE }
@@ -332,7 +367,7 @@ export class MailSearchViewModel {
 	}
 
 	selectStartDate(startDate: Date | null): PaidFunctionResult {
-		const canSelectStartDate = this.canSelectTimePeriod()
+		const canSelectStartDate = this.canSelectTimePeriod() || this.isFreeAccountWithUnlimitedSearchRange()
 
 		const targetStartDate = canSelectStartDate ? startDate : getFreeSearchStartDate()
 		const isSameDay = isSameDayOfDate(this.startDate, targetStartDate)
@@ -352,7 +387,7 @@ export class MailSearchViewModel {
 			// for non-blocking search, the current search result will be extended as the range extends.
 			// for full-archive-download search, once indexing is done, the list will reload automatically if empty and
 			// by user action if not.
-			void this.indexerFacade.extendMailIndex(targetStartDate?.getTime() ?? FULL_INDEXED_TIMESTAMP)
+			void this.indexerFacade.extendMailIndex(targetStartDate?.getTime() ?? FULL_INDEXED_TIMESTAMP, this.shouldIndexAllMailDetails())
 		} else if (!isSameDay) {
 			this.searchAgain()
 		}
@@ -361,7 +396,7 @@ export class MailSearchViewModel {
 	}
 
 	extendMailIndex(time: number): Promise<void> {
-		return this.indexerFacade.extendMailIndex(time)
+		return this.indexerFacade.extendMailIndex(time, this.shouldIndexAllMailDetails())
 	}
 
 	cancelMailIndexing() {
@@ -450,9 +485,10 @@ export class MailSearchViewModel {
 		if (!EnvProvider.get().isFullArchiveSearchAvailable()) {
 			// Free users are not permitted to search beyond a certain date; avoid searching beyond this date if the index
 			// extended beyond it
-			const dateLimit = this.canSelectTimePeriod()
-				? newState.currentMailIndexTimestamp
-				: Math.max(newState.currentMailIndexTimestamp, getFreeSearchStartDate().getTime())
+			const dateLimit =
+				this.canSelectTimePeriod() || this.isFreeAccountWithUnlimitedSearchRange()
+					? newState.currentMailIndexTimestamp
+					: Math.max(newState.currentMailIndexTimestamp, getFreeSearchStartDate().getTime())
 			if (
 				isIndexingDoneOrCanceled &&
 				newState.currentMailIndexTimestamp !== FULL_INDEXED_TIMESTAMP &&

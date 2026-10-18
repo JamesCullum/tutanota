@@ -4,11 +4,11 @@ import m, { Children, Component, Vnode } from "mithril"
 import { ListModel } from "../../../common/misc/ListModel"
 import { theme } from "../../../../ui/theme"
 import { ListLoadingState, MultiselectMode, RenderConfig } from "../../../../ui/base/List"
-import { YEAR_IN_MILLIS } from "@tutao/utils"
-import { lang } from "../../../../ui/utils/LanguageViewModel"
+import { assertNotNull, YEAR_IN_MILLIS } from "@tutao/utils"
+import { lang, TranslationKey } from "../../../../ui/utils/LanguageViewModel"
 import { Button, ButtonType } from "../../../../ui/base/Button"
 import { CircleLoadingBar } from "../../../../ui/CircleLoadingBar"
-import { EnvProvider, FULL_INDEXED_TIMESTAMP } from "@tutao/app-env"
+import { EnvProvider, FULL_INDEXED_TIMESTAMP, TimeConstants } from "@tutao/app-env"
 import { formatDate } from "../../../../ui/utils/Formatter"
 import { component_size, px, size } from "../../../../ui/size"
 import { Icons } from "../../../../ui/base/icons/Icons"
@@ -23,6 +23,8 @@ export interface MailSearchListViewAttrs extends CommonSearchListViewAttrs<Mail>
 	extendMailIndex: (time: number) => Promise<void>
 	cancelMailIndexing: () => void
 	isIncompleteMailList: boolean
+	/** whether older mails are only searched by subject, sender, first recipient and attachment names */
+	isMailDetailSearchLimited: boolean
 	searchAndRecreateMailList: () => unknown
 }
 export class MailSearchListView implements Component<MailSearchListViewAttrs> {
@@ -80,18 +82,20 @@ export class MailSearchListView implements Component<MailSearchListViewAttrs> {
 				EnvProvider.get().isFullArchiveSearchAvailable()) ||
 			(sixMonthsBeforeStartDate && sixMonthsBeforeStartDate.getTime() < this.attrs.indexState.currentMailIndexTimestamp)
 		) {
-			const extendToDate = EnvProvider.get().isFullArchiveSearchAvailable() ? null : sixMonthsBeforeStartDate
-
 			// If the list is in Loading or ConnectionLost, the list has a default message that should be displayed
-			innerChildren = m(
-				"",
-				{
-					onclick: () => {
-						this.attrs.extendSearchResult(extendToDate)
+			if (EnvProvider.get().isFullArchiveSearchAvailable()) {
+				innerChildren = m(
+					"",
+					{
+						onclick: () => {
+							this.attrs.extendSearchResult(null)
+						},
 					},
-				},
-				this.renderShowMoreButton(extendToDate),
-			)
+					this.renderShowMoreButton(null),
+				)
+			} else {
+				innerChildren = this.renderExtendRangeButtons(assertNotNull(this.attrs.currentStartDate))
+			}
 		} else if (
 			this.attrs.listModel.state.loadingStatus === ListLoadingState.Done &&
 			this.attrs.indexState.currentMailIndexTimestamp === FULL_INDEXED_TIMESTAMP &&
@@ -147,6 +151,23 @@ export class MailSearchListView implements Component<MailSearchListViewAttrs> {
 			m(".flex-center.content-accent-fg.b", lang.getTranslationText("reloadList_action")),
 			m(".bottom.small", lang.getTranslationText("moreEmailsAvailable_msg")),
 		]
+	}
+
+	private renderExtendRangeButtons(currentStartDate: Date): Children {
+		const extendBy = (label: TranslationKey, millis: number) =>
+			m(Button, {
+				label,
+				click: () => this.attrs.extendSearchResult(new Date(currentStartDate.getTime() - millis)),
+				type: ButtonType.Secondary,
+			})
+		return m(".flex.col.items-center", [
+			this.attrs.isMailDetailSearchLimited ? m(".small", lang.getTranslationText("searchMailDetailsLimited_msg")) : null,
+			m(".flex.items-center", [
+				extendBy("searchExtend28Days_action", TimeConstants.daysToMillis(28)),
+				extendBy("searchExtend3Months_action", YEAR_IN_MILLIS / 4),
+				extendBy("searchExtend6Months_action", YEAR_IN_MILLIS / 2),
+			]),
+		])
 	}
 
 	private renderShowMoreButton(searchUntilDate: Date | null): Children {
